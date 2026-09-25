@@ -45,6 +45,12 @@ GIT_TOKEN = getenv(
 SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/Mecobots").strip()
 SUPPORT_GROUP = getenv("SUPPORT_GROUP", "https://t.me/Mecobots").strip()
 
+# Keep Telegram button URLs valid even if a secret contains an invalid value.
+if not re.match(r"^https?://(?:t\.me|telegram\.me)/[^\s]+$", SUPPORT_CHANNEL):
+    SUPPORT_CHANNEL = "https://t.me/Mecobots"
+if not re.match(r"^https?://(?:t\.me|telegram\.me)/[^\s]+$", SUPPORT_GROUP):
+    SUPPORT_GROUP = "https://t.me/Mecobots"
+
 # Set this to True if you want the assistant to automatically leave chats after an interval
 AUTO_LEAVING_ASSISTANT = bool(getenv("AUTO_LEAVING_ASSISTANT", False))
 
