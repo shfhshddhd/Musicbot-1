@@ -71,6 +71,7 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           MONGO_DB_URI: ${{ secrets.MONGO_DB_URI }}
+          DURATION_LIMIT: ${{ secrets.DURATION_LIMIT }}
           OWNER_ID: ${{ secrets.OWNER_ID }}
           HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
