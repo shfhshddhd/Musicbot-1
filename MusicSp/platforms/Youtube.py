@@ -3,6 +3,7 @@ import os
 import re
 from typing import Union
 import yt_dlp
+import json
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 from py_yt import VideosSearch, Playlist
@@ -221,30 +222,142 @@ class YouTubeAPI:
             ids.append(vid)
         return ids
 
+    async def _innertube_request(self, endpoint: str, payload: dict):
+        api_key = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+        url = f"https://m.youtube.com/youtubei/v1/{endpoint}?key={api_key}"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36",
+        }
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"InnerTube HTTP {resp.status}")
+                return await resp.json(content_type=None)
+
+    async def _innertube_track(self, link: str, videoid: Union[bool, str] = None):
+        if videoid:
+            link = self.base + link
+        match = re.search(r"(?:v=|youtu\.be/|youtube\.com/(?:embed/|shorts/|live/))([A-Za-z0-9_-]{11})", link)
+        if not match:
+            return None
+        vidid = match.group(1)
+        payload = {
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.20250101.01.00",
+                }
+            },
+            "videoId": vidid,
+        }
+        data = await self._innertube_request("player", payload)
+        details = data.get("videoDetails") or {}
+        title = details.get("title", "")
+        if not title:
+            return None
+        duration_sec = int(details.get("lengthSeconds", 0) or 0)
+        duration_min = f"{duration_sec // 60}:{duration_sec % 60:02d}"
+        thumbs = ((details.get("thumbnail") or {}).get("thumbnails") or [])
+        thumbnail = thumbs[-1].get("url", "").split("?")[0] if thumbs else ""
+        return {
+            "title": title,
+            "link": self.base + vidid,
+            "vidid": vidid,
+            "duration_min": duration_min,
+            "thumb": thumbnail,
+        }
+
+    async def _innertube_search(self, query: str):
+        payload = {
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.20250101.01.00",
+                    "hl": "en-IN",
+                    "gl": "IN",
+                }
+            },
+            "query": query,
+            "params": "CAASAhAB",
+        }
+        data = await self._innertube_request("search", payload)
+        tracks = []
+
+        def walk(node):
+            if len(tracks) >= 1:
+                return
+            if isinstance(node, dict):
+                renderer = node.get("videoRenderer")
+                if isinstance(renderer, dict):
+                    vidid = renderer.get("videoId", "")
+                    title = ""
+                    runs = ((renderer.get("title") or {}).get("runs") or [])
+                    if runs:
+                        title = runs[0].get("text", "")
+                    if not title:
+                        title = ((renderer.get("title") or {}).get("simpleText") or "")
+                    if vidid and title:
+                        length = ((renderer.get("lengthText") or {}).get("simpleText") or "0:00")
+                        thumbs = ((renderer.get("thumbnail") or {}).get("thumbnails") or [])
+                        thumb = thumbs[-1].get("url", "").split("?")[0] if thumbs else ""
+                        tracks.append({
+                            "title": title,
+                            "link": self.base + vidid,
+                            "vidid": vidid,
+                            "duration_min": length,
+                            "thumb": thumb,
+                        })
+                        return
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+                    if tracks:
+                        return
+
+        walk(data)
+        return tracks[0] if tracks else None
+
     async def track(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if not res or not res.get("result"):
-            return {}, ""
-        for result in res["result"]:
-            title = result.get("title", "")
-            duration_min = result.get("duration", "0:00")
-            vidid = result.get("id", "")
-            yturl = result.get("link", "")
-            thumbnails = result.get("thumbnails", [])
-            thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
-        track_details = {
-            "title": title,
-            "link": yturl,
-            "vidid": vidid,
-            "duration_min": duration_min,
-            "thumb": thumbnail,
-        }
-        return track_details, vidid
+
+        try:
+            direct = await self._innertube_track(link)
+            if direct:
+                return direct, direct["vidid"]
+        except Exception:
+            pass
+
+        try:
+            searched = await self._innertube_search(link)
+            if searched:
+                return searched, searched["vidid"]
+        except Exception:
+            pass
+
+        try:
+            results = VideosSearch(link, limit=1)
+            res = await results.next()
+            if res and res.get("result"):
+                result = res["result"][0]
+                details = {
+                    "title": result.get("title", ""),
+                    "link": result.get("link", ""),
+                    "vidid": result.get("id", ""),
+                    "duration_min": result.get("duration", "0:00"),
+                    "thumb": (result.get("thumbnails") or [{}])[0].get("url", "").split("?")[0],
+                }
+                return details, details["vidid"]
+        except Exception:
+            pass
+
+        return {}, ""
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
