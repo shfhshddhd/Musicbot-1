@@ -223,102 +223,201 @@ class YouTubeAPI:
 
     async def _innertube_request(self, endpoint: str, payload: dict):
         api_key = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
-        url = f"https://m.youtube.com/youtubei/v1/{endpoint}?key={api_key}"
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36",
+            "Accept": "application/json",
         }
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(f"InnerTube HTTP {resp.status}")
-                return await resp.json(content_type=None)
+        timeout = aiohttp.ClientTimeout(total=15)
+        last_error = None
+
+        # Retry transient failures and use more than one YouTube endpoint.
+        for attempt in range(3):
+            hosts = ("www.youtube.com", "m.youtube.com") if attempt == 0 else ("m.youtube.com", "www.youtube.com")
+            for host in hosts:
+                try:
+                    url = f"https://{host}/youtubei/v1/{endpoint}?key={api_key}"
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(url, json=payload, headers=headers) as resp:
+                            if resp.status != 200:
+                                body = await resp.text()
+                                raise RuntimeError(
+                                    f"InnerTube {endpoint} HTTP {resp.status}: {body[:160]}"
+                                )
+                            return await resp.json(content_type=None)
+                except Exception as e:
+                    last_error = e
+                    if attempt < 2:
+                        await asyncio.sleep(0.7 * (attempt + 1))
+
+        raise last_error or RuntimeError(f"InnerTube {endpoint} request failed")
+
+    @staticmethod
+    def _valid_track(details):
+        if not isinstance(details, dict):
+            return False
+        title = str(details.get("title") or "").strip()
+        vidid = str(details.get("vidid") or "").strip()
+        link = str(details.get("link") or "").strip()
+        return bool(title and re.fullmatch(r"[A-Za-z0-9_-]{11}", vidid) and link)
 
     async def _innertube_track(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
-        match = re.search(r"(?:v=|youtu\.be/|youtube\.com/(?:embed/|shorts/|live/))([A-Za-z0-9_-]{11})", link)
+        match = re.search(
+            r"(?:v=|youtu\.be/|youtube\.com/(?:embed/|shorts/|live/))([A-Za-z0-9_-]{11})",
+            link,
+        )
         if not match:
             return None
+
         vidid = match.group(1)
-        payload = {
-            "context": {
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": "2.20250101.01.00",
-                }
+        clients = [
+            {
+                "clientName": "WEB",
+                "clientVersion": "2.20260708.00.00",
             },
-            "videoId": vidid,
-        }
-        data = await self._innertube_request("player", payload)
-        details = data.get("videoDetails") or {}
-        title = details.get("title", "")
-        if not title:
-            return None
-        duration_sec = int(details.get("lengthSeconds", 0) or 0)
-        duration_min = f"{duration_sec // 60}:{duration_sec % 60:02d}"
-        thumbs = ((details.get("thumbnail") or {}).get("thumbnails") or [])
-        thumbnail = thumbs[-1].get("url", "").split("?")[0] if thumbs else ""
-        return {
-            "title": title,
-            "link": self.base + vidid,
-            "vidid": vidid,
-            "duration_min": duration_min,
-            "thumb": thumbnail,
-        }
+            {
+                "clientName": "MWEB",
+                "clientVersion": "2.20260708.05.00",
+            },
+            {
+                "clientName": "ANDROID",
+                "clientVersion": "21.26.364",
+                "androidSdkVersion": 30,
+                "userAgent": "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
+                "osName": "Android",
+                "osVersion": "11",
+            },
+        ]
+
+        last_error = None
+        for client in clients:
+            try:
+                payload = {
+                    "context": {
+                        "client": {
+                            **client,
+                        }
+                    },
+                    "videoId": vidid,
+                }
+                data = await self._innertube_request("player", payload)
+                details = data.get("videoDetails") or {}
+                title = str(details.get("title") or "").strip()
+                if not title:
+                    status = (data.get("playabilityStatus") or {}).get("status", "NO_TITLE")
+                    raise RuntimeError(f"player {client['clientName']} returned {status}")
+
+                duration_sec = int(details.get("lengthSeconds", 0) or 0)
+                duration_min = f"{duration_sec // 60}:{duration_sec % 60:02d}"
+                thumbs = ((details.get("thumbnail") or {}).get("thumbnails") or [])
+                thumbnail = thumbs[-1].get("url", "").split("?")[0] if thumbs else ""
+                result = {
+                    "title": title,
+                    "link": self.base + vidid,
+                    "vidid": vidid,
+                    "duration_min": duration_min,
+                    "thumb": thumbnail,
+                }
+                if self._valid_track(result):
+                    return result
+            except Exception as e:
+                last_error = e
+                print(
+                    f"[YOUTUBE][PLAYER] client={client['clientName']} failed: {e}",
+                    flush=True,
+                )
+
+        if last_error:
+            raise last_error
+        return None
 
     async def _innertube_search(self, query: str):
-        payload = {
-            "context": {
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": "2.20250101.01.00",
-                    "hl": "en-IN",
-                    "gl": "IN",
-                }
-            },
-            "query": query,
-            "params": "CAASAhAB",
-        }
-        data = await self._innertube_request("search", payload)
-        tracks = []
+        clients = [
+            ("WEB", "2.20260708.00.00"),
+            ("MWEB", "2.20260708.05.00"),
+        ]
+        last_error = None
 
-        def walk(node):
-            if len(tracks) >= 1:
-                return
-            if isinstance(node, dict):
-                renderer = node.get("videoRenderer")
-                if isinstance(renderer, dict):
-                    vidid = renderer.get("videoId", "")
-                    title = ""
-                    runs = ((renderer.get("title") or {}).get("runs") or [])
-                    if runs:
-                        title = runs[0].get("text", "")
-                    if not title:
-                        title = ((renderer.get("title") or {}).get("simpleText") or "")
-                    if vidid and title:
-                        length = ((renderer.get("lengthText") or {}).get("simpleText") or "0:00")
-                        thumbs = ((renderer.get("thumbnail") or {}).get("thumbnails") or [])
-                        thumb = thumbs[-1].get("url", "").split("?")[0] if thumbs else ""
-                        tracks.append({
-                            "title": title,
-                            "link": self.base + vidid,
-                            "vidid": vidid,
-                            "duration_min": length,
-                            "thumb": thumb,
-                        })
-                        return
-                for value in node.values():
-                    walk(value)
-            elif isinstance(node, list):
-                for value in node:
-                    walk(value)
-                    if tracks:
-                        return
+        for client_name, client_version in clients:
+            for use_params in (True, False):
+                try:
+                    client = {
+                        "clientName": client_name,
+                        "clientVersion": client_version,
+                        "hl": "en-IN",
+                        "gl": "IN",
+                    }
+                    payload = {
+                        "context": {"client": client},
+                        "query": query,
+                    }
+                    if use_params:
+                        payload["params"] = "CAASAhAB"
 
-        walk(data)
-        return tracks[0] if tracks else None
+                    data = await self._innertube_request("search", payload)
+                    tracks = []
+
+                    def walk(node):
+                        if tracks:
+                            return
+                        if isinstance(node, dict):
+                            renderer = node.get("videoRenderer")
+                            if isinstance(renderer, dict):
+                                vidid = renderer.get("videoId", "")
+                                title_data = renderer.get("title") or {}
+                                runs = title_data.get("runs") or []
+                                title = runs[0].get("text", "") if runs else ""
+                                if not title:
+                                    title = title_data.get("simpleText", "")
+                                if vidid and title:
+                                    length = (
+                                        (renderer.get("lengthText") or {}).get("simpleText")
+                                        or "0:00"
+                                    )
+                                    thumbs = (
+                                        (renderer.get("thumbnail") or {}).get("thumbnails")
+                                        or []
+                                    )
+                                    thumb = (
+                                        thumbs[-1].get("url", "").split("?")[0]
+                                        if thumbs
+                                        else ""
+                                    )
+                                    tracks.append(
+                                        {
+                                            "title": title,
+                                            "link": self.base + vidid,
+                                            "vidid": vidid,
+                                            "duration_min": length,
+                                            "thumb": thumb,
+                                        }
+                                    )
+                                    return
+                            for value in node.values():
+                                walk(value)
+                        elif isinstance(node, list):
+                            for value in node:
+                                walk(value)
+                                if tracks:
+                                    return
+
+                    walk(data)
+                    if tracks and self._valid_track(tracks[0]):
+                        return tracks[0]
+                    raise RuntimeError(
+                        f"search {client_name} returned no valid video for {query!r}"
+                    )
+                except Exception as e:
+                    last_error = e
+                    print(
+                        f"[YOUTUBE][SEARCH] client={client_name} params={use_params} failed: {e}",
+                        flush=True,
+                    )
+
+        if last_error:
+            raise last_error
+        return None
 
     async def track(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
@@ -326,36 +425,53 @@ class YouTubeAPI:
         if "&" in link:
             link = link.split("&")[0]
 
+        # 1. Direct video URL: resolve metadata through several InnerTube clients.
         try:
             direct = await self._innertube_track(link)
-            if direct:
+            if direct and self._valid_track(direct):
                 return direct, direct["vidid"]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[YOUTUBE][TRACK] direct resolution failed: {e}", flush=True)
 
+        # 2. Search: retry with alternate InnerTube clients/request shapes.
         try:
             searched = await self._innertube_search(link)
-            if searched:
+            if searched and self._valid_track(searched):
                 return searched, searched["vidid"]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[YOUTUBE][TRACK] InnerTube search failed: {e}", flush=True)
 
-        try:
-            results = VideosSearch(link, limit=1)
-            res = await results.next()
-            if res and res.get("result"):
-                result = res["result"][0]
-                details = {
-                    "title": result.get("title", ""),
-                    "link": result.get("link", ""),
-                    "vidid": result.get("id", ""),
-                    "duration_min": result.get("duration", "0:00"),
-                    "thumb": (result.get("thumbnails") or [{}])[0].get("url", "").split("?")[0],
-                }
-                return details, details["vidid"]
-        except Exception:
-            pass
+        # 3. py-yt fallback with its own retries.
+        last_error = None
+        for attempt in range(2):
+            try:
+                results = VideosSearch(link, limit=1)
+                res = await results.next()
+                if res and res.get("result"):
+                    result = res["result"][0]
+                    details = {
+                        "title": result.get("title", ""),
+                        "link": result.get("link", ""),
+                        "vidid": result.get("id", ""),
+                        "duration_min": result.get("duration", "0:00"),
+                        "thumb": (
+                            (result.get("thumbnails") or [{}])[0]
+                            .get("url", "")
+                            .split("?")[0]
+                        ),
+                    }
+                    if self._valid_track(details):
+                        return details, details["vidid"]
+                    raise RuntimeError("py-yt returned an invalid video result")
+                raise RuntimeError("py-yt returned no results")
+            except Exception as e:
+                last_error = e
+                print(f"[YOUTUBE][PY-YT] attempt={attempt + 1} failed: {e}", flush=True)
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
 
+        if last_error:
+            print(f"[YOUTUBE][TRACK] all resolution methods failed: {last_error}", flush=True)
         return {}, ""
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
