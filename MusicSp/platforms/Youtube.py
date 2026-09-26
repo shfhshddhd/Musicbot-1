@@ -226,25 +226,66 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if not res or not res.get("result"):
-            return {}, ""
-        for result in res["result"]:
-            title = result.get("title", "")
-            duration_min = result.get("duration", "0:00")
-            vidid = result.get("id", "")
-            yturl = result.get("link", "")
-            thumbnails = result.get("thumbnails", [])
-            thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
-        track_details = {
-            "title": title,
-            "link": yturl,
-            "vidid": vidid,
-            "duration_min": duration_min,
-            "thumb": thumbnail,
-        }
-        return track_details, vidid
+
+        try:
+            results = VideosSearch(link, limit=1)
+            res = await results.next()
+            if res and res.get("result"):
+                result = res["result"][0]
+                title = result.get("title", "")
+                duration_min = result.get("duration", "0:00")
+                vidid = result.get("id", "")
+                yturl = result.get("link", "")
+                thumbnails = result.get("thumbnails", [])
+                thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
+                if title and vidid:
+                    return {
+                        "title": title,
+                        "link": yturl or self.base + vidid,
+                        "vidid": vidid,
+                        "duration_min": duration_min,
+                        "thumb": thumbnail,
+                    }, vidid
+        except Exception as e:
+            print(f"[YOUTUBE] py_yt track failed, using yt-dlp fallback: {e}", flush=True)
+
+        try:
+            def _fallback():
+                target = link if videoid else f"ytsearch1:{link}"
+                opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "noplaylist": True,
+                    "skip_download": True,
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(target, download=False)
+                    if info and info.get("entries"):
+                        info = next((entry for entry in info["entries"] if entry), None)
+                    return info
+
+            info = await asyncio.to_thread(_fallback)
+            if not info or not info.get("id"):
+                return {}, ""
+
+            vidid = info.get("id", "")
+            duration = info.get("duration")
+            if duration:
+                duration = int(duration)
+                duration_min = f"{duration // 60}:{duration % 60:02d}"
+            else:
+                duration_min = "0:00"
+
+            return {
+                "title": info.get("title", ""),
+                "link": info.get("webpage_url") or self.base + vidid,
+                "vidid": vidid,
+                "duration_min": duration_min,
+                "thumb": info.get("thumbnail", ""),
+            }, vidid
+        except Exception as e:
+            print(f"[YOUTUBE] yt-dlp track fallback failed: {e}", flush=True)
+            raise
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
