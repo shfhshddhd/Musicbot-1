@@ -1,5 +1,6 @@
 import random
 import string
+import traceback
 
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardMarkup, InputMediaPhoto, Message
@@ -169,7 +170,9 @@ async def play_commnd(
             else:
                 try:
                     details, track_id = await YouTube.track(url)
-                except:
+                except Exception as e:
+                    print(f"[PLAY][YOUTUBE TRACK ERROR] url={url!r}", flush=True)
+                    traceback.print_exc()
                     return await mystic.edit_text(_["play_3"])
                 streamtype = "youtube"
                 img = details["thumb"]
@@ -325,7 +328,9 @@ async def play_commnd(
             query = query.replace("-v", "")
         try:
             details, track_id = await YouTube.track(query)
-        except:
+        except Exception as e:
+            print(f"[PLAY][YOUTUBE SEARCH ERROR] query={query!r}", flush=True)
+            traceback.print_exc()
             return await mystic.edit_text(_["play_3"])
         streamtype = "youtube"
     if str(playmode) == "Direct":
@@ -455,7 +460,9 @@ async def play_music(client, CallbackQuery, _):
     )
     try:
         details, track_id = await YouTube.track(vidid, True)
-    except:
+    except Exception as e:
+        print(f"[PLAY][YOUTUBE CALLBACK ERROR] video_id={vidid!r}", flush=True)
+        traceback.print_exc()
         return await mystic.edit_text(_["play_3"])
     if details["duration_min"]:
         duration_sec = time_to_seconds(details["duration_min"])
