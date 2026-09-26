@@ -70,7 +70,7 @@ def private_panel(_):
         ],
         [
             InlineKeyboardButton(
-                text="DEVELOPER",
+                text="『 ᴅᴇᴠᴇʟᴏᴘᴇʀ 』",
                 url="https://t.me/SAREEF_FUCKER",
                 style=ButtonStyle.PRIMARY,
             ),
