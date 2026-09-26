@@ -20,9 +20,14 @@ def start_panel(_):
                 style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
-                text=_["S_B_2"], url=config.SUPPORT_GROUP,
+                text=_["S_B_2"], url="https://t.me/SASTA_DEVLOPER",
                 style=ButtonStyle.SUCCESS,
             ),
+        ],
+        [
+            InlineKeyboardButton(text="DEVELOPER", url="https://t.me/SAREEF_FUCKER",
+                                 style=ButtonStyle.PRIMARY,
+                                ),
         ],
     ]
     return buttons
@@ -54,10 +59,10 @@ def private_panel(_):
                                 ),
         ],
         [
-            InlineKeyboardButton(text=_["S_B_6"], url=config.SUPPORT_CHANNEL,
+            InlineKeyboardButton(text=_["S_B_6"], url="https://t.me/SASTA_DEVLOPER_HU",
                                  style=ButtonStyle.PRIMARY,
                                 ),
-            InlineKeyboardButton(text="˹ 𝖲𝗈𝗎𝗋𝖼𝖾𝖢𝗈𝖽𝖾 ˼", url="https://github.com/DevloperSP/MusicSp",
+            InlineKeyboardButton(text="˹ 𝖲𝗈𝗎𝗋𝖼𝖾𝖢𝗈𝖽𝖾 ˼", url="https://github.com",
                                   style=ButtonStyle.DANGER,
                                 ),
         ],
