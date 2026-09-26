@@ -96,6 +96,8 @@ jobs:
           STRING_SESSION5: ${{ secrets.STRING_SESSION5 }}
           START_IMG_URL: ${{ secrets.START_IMG_URL }}
           PING_IMG_URL: ${{ secrets.PING_IMG_URL }}
+          PYTHONUNBUFFERED: "1"
+          PYTHONFAULTHANDLER: "1"
         shell: bash
         run: |
           set -euo pipefail
