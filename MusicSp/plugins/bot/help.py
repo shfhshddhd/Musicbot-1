@@ -28,7 +28,7 @@ async def helper_private(
         _ = get_string(language)
         keyboard = help_pannel(_, True)
         await update.edit_message_text(
-            _["help_1"].format(SUPPORT_GROUP), reply_markup=keyboard
+            _["help_1"].format("https://t.me/SASTA_DEVLOPER_HU"), reply_markup=keyboard
         )
     else:
         try:
